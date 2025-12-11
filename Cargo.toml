@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "scheds/rust/scx_bpfland",
+]
+resolver = "2"
+
+[profile.release]
+lto = "thin"
+strip = true
+incremental = true
+codegen-units = 1
+
+
