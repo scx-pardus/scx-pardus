@@ -672,6 +672,7 @@ static void record_runtime(pid_t pid, u64 slice_ns) {
       // bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
       // bpf_printk("Attempting to reset count: PID=%d, count=%p", pid,
       // test_hist );
+      return;
     }
 
   if (hist->count == U8_MAX) {
