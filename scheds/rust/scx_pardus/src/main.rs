@@ -2,6 +2,7 @@ mod bpf_skel;
 pub use bpf_skel::*;
 pub mod bpf_intf;
 pub use bpf_intf::*;
+use libbpf_sys::{bpf_map, bpf_map__fd};
 
 mod stats;
 use std::ffi::{c_int, c_ulong};
@@ -11,6 +12,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
+use std::os::unix::io::RawFd;
+use std::slice;
+use libc::{mmap, PROT_READ, PROT_WRITE, MAP_SHARED};
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -18,7 +22,7 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use crossbeam::channel::RecvTimeoutError;
-use libbpf_rs::OpenObject;
+use libbpf_rs::{AsRawLibbpf, MapCore, OpenObject};
 use libbpf_rs::ProgramInput;
 use log::warn;
 use log::{debug, info};
@@ -42,6 +46,115 @@ use scx_utils::NR_CPU_IDS;
 use stats::Metrics;
 
 const SCHEDULER_NAME: &str = "scx_pardus";
+const RUNTIME_HISTORY_SIZE: usize = 50;
+const PREDICTION_ARRAY_SIZE: usize = 4096;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SliceRingBuffer {
+    pub head: u8,
+    pub count: u8,
+    _padding: [u8; 6], 
+    pub runtimes_in_ns: [u64; RUNTIME_HISTORY_SIZE], 
+    pub expected_slice: u64,
+}
+
+impl Default for SliceRingBuffer {
+    fn default() -> Self {
+        Self {
+            head: 0,
+            count: 0,
+            _padding: [0; 6],
+            runtimes_in_ns: [0; RUNTIME_HISTORY_SIZE],
+            expected_slice: 0,
+        }
+    }
+}
+
+
+
+struct MmapedBpfArray {
+    ptr: *mut SliceRingBuffer,
+    len: usize,
+    size: usize, 
+}
+
+impl MmapedBpfArray {
+    pub fn new(fd: i32, max_entries: usize) -> Result<Self, Box<dyn std::error::Error>> {
+     
+        
+        let entry_size = std::mem::size_of::<SliceRingBuffer>();
+        println!("max entry size: {}" , entry_size);
+
+        let total_size = entry_size * max_entries as usize;
+        
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                total_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        
+        if ptr == libc::MAP_FAILED {
+            return Err(format!("mmap failed: {}", std::io::Error::last_os_error()).into());
+        }
+        
+        Ok(Self {
+            ptr: ptr as *mut SliceRingBuffer,
+            len: max_entries as usize,
+            size: total_size,
+        })
+    }
+    
+    pub fn get(&self, idx: usize) -> Option<&SliceRingBuffer> {
+        if idx >= self.len {
+            return None;
+        }
+        unsafe { Some(&*self.ptr.add(idx)) }
+    }
+    
+    /// Get a mutable reference to an entry at the given index
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut SliceRingBuffer> {
+        if idx >= self.len {
+            return None;
+        }
+        unsafe { Some(&mut *self.ptr.add(idx)) }
+    }
+    
+    /// Get the entire array as a slice
+    pub fn as_slice(&self) -> &[SliceRingBuffer] {
+        unsafe { slice::from_raw_parts(self.ptr, self.len) }
+    }
+    
+    /// Get the entire array as a mutable slice
+    pub fn as_mut_slice(&mut self) -> &mut [SliceRingBuffer] {
+        unsafe { slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+    
+    /// Access entry directly by index (panics if out of bounds)
+    pub fn index(&self, idx: usize) -> &SliceRingBuffer {
+        assert!(idx < self.len, "index out of bounds");
+        unsafe { &*self.ptr.add(idx) }
+    }
+    
+    /// Access entry mutably by index (panics if out of bounds)
+    pub fn index_mut(&mut self, idx: usize) -> &mut SliceRingBuffer {
+        assert!(idx < self.len, "index out of bounds");
+        unsafe { &mut *self.ptr.add(idx) }
+    }
+}
+
+impl Drop for MmapedBpfArray {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.ptr as *mut libc::c_void, self.size);
+        }
+    }
+}
 
 #[derive(PartialEq)]
 enum Powermode {
@@ -240,6 +353,7 @@ struct Scheduler<'a> {
     topo: Topology,
     power_profile: PowerProfile,
     stats_server: StatsServer<(), Metrics>,
+    mmap_array: MmapedBpfArray,
     user_restart: bool,
 }
 
@@ -311,6 +425,7 @@ impl<'a> Scheduler<'a> {
         let open_opts = opts.libbpf.clone().into_bpf_open_opts();
         let mut skel = scx_ops_open!(skel_builder, open_object, bpfland_ops, open_opts)?;
 
+
         skel.struct_ops.bpfland_ops_mut().exit_dump_len = opts.exit_dump_len;
 
         // Override default BPF scheduling parameters.
@@ -363,6 +478,14 @@ impl<'a> Scheduler<'a> {
         // Load the BPF program for validation.
         let mut skel = scx_ops_load!(skel, bpfland_ops, uei)?;
 
+        
+        let map_object = skel.maps.slice_ring_buffer_array.as_libbpf_object();
+        let raw_mut: *mut bpf_map = map_object.as_ptr();
+        let raw_const: *const bpf_map = raw_mut as *const bpf_map;
+        let map_fd: i32 = unsafe{bpf_map__fd(raw_const)}; 
+        //println!("map fd: {}",map_fd);
+        let map_max_entries: usize = skel.maps.slice_ring_buffer_array.max_entries() as usize;
+
         // Initialize the primary scheduling domain.
         Self::init_energy_domain(&mut skel, &domain).map_err(|err| {
             anyhow!(
@@ -389,6 +512,11 @@ impl<'a> Scheduler<'a> {
         let struct_ops = Some(scx_ops_attach!(skel, bpfland_ops)?);
         let stats_server = StatsServer::new(stats::server_data()).launch()?;
 
+        let mut mmap_array: MmapedBpfArray = MmapedBpfArray::new(map_fd, map_max_entries).unwrap();
+
+        
+
+
         Ok(Self {
             skel,
             struct_ops,
@@ -396,6 +524,7 @@ impl<'a> Scheduler<'a> {
             topo,
             power_profile,
             stats_server,
+            mmap_array,
             user_restart: false,
         })
     }
@@ -678,13 +807,17 @@ fn main() -> Result<()> {
     let mut open_object = MaybeUninit::uninit();
     loop {
         let mut sched = Scheduler::init(&opts, &mut open_object)?;
+
         if !sched.run(shutdown.clone())?.should_restart() {
             if sched.user_restart {
                 continue;
             }
             break;
         }
+        
     }
+
+    
 
     Ok(())
 }

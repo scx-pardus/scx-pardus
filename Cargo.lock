@@ -1378,6 +1378,8 @@ dependencies = [
  "crossbeam",
  "ctrlc",
  "libbpf-rs",
+ "libbpf-sys",
+ "libc",
  "log",
  "scx_cargo",
  "scx_stats",

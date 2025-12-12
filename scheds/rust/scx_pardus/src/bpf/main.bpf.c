@@ -729,8 +729,7 @@ static u64 get_ml_timeslice(pid_t pid)
         return timeslice->expected_slice;
     }
     
-   
-    
+       
     return DEFAULT_TIMESLICE_NS;
 }
 
