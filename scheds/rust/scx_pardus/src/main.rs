@@ -717,7 +717,7 @@ impl<'a> Scheduler<'a> {
             std::thread::sleep(Duration::from_millis(1000));
 
             for ind in 0..len_of_array {
-                if self.mmap_array.index(ind).count != 255 {
+                if self.mmap_array.index(ind).count != 250 as u8 {
                     active_slots.push(ind); // init all to 255 in bpf!!!!!
                     if active_slots.len() > 15 {
                         let mut selected_slots: Vec<[u64; 50]> = Vec::new();
@@ -734,11 +734,15 @@ impl<'a> Scheduler<'a> {
                                 model_runner::predict(selected_slots.clone()).unwrap();
                         //println!("predicted: {}", result_model[0]);
 
+
+                        print!("predicted :");
                         for cur_i in 0..16 {
 
                             self.mmap_array.index_mut(selected_slots_ind[cur_i]).expected_slice = result_model[cur_i];
+                            print!("{} ",self.mmap_array.index(selected_slots_ind[cur_i]).count)
 
                         }
+                        println!("");
 
 
 

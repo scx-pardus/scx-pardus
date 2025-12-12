@@ -8,7 +8,7 @@
 
 #define U64_MAX 18446744073709551615ULL
 
-#define U8_MAX 255
+#define DEAD_TASK 250
 
 /*
  * Maximum time a task can wait in the scheduler's queue before triggering
@@ -639,7 +639,7 @@ static int calloc_cpumask(struct bpf_cpumask **p_cpumask) {
 }
 
 /* ML modelinin dönüş yapmadığı durumlardaki varsayılan slice */
-static const u64 DEFAULT_TIMESLICE_NS = 3000000;
+static const u64 DEFAULT_TIMESLICE_NS = 3000000ULL;
 
 /* BPF Map'e yeni slice ekleme fonksiyonu */
 static void record_runtime(pid_t pid, u64 slice_ns) {
@@ -662,7 +662,7 @@ static void record_runtime(pid_t pid, u64 slice_ns) {
     if (!hist) {
       struct slice_ring_buffer bos_hist = {0};
       bos_hist.head = 0;
-      bos_hist.count = U8_MAX;
+      bos_hist.count = DEAD_TASK;
       bos_hist.expected_slice = U64_MAX;
       bos_hist.runtimes_in_ns[0] = slice_ns;
       bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, &bos_hist,
@@ -675,7 +675,7 @@ static void record_runtime(pid_t pid, u64 slice_ns) {
       return;
     }
 
-  if (hist->count == U8_MAX) {
+  if (hist->count == DEAD_TASK) {
     // bpf_printk("Attempting to reset count: PID=%d, count=%u", pid,
     // hist->count);
     hist->head = 1;
@@ -717,7 +717,7 @@ static u64 get_ml_timeslice(pid_t pid) {
   if (array_idx) {
     timeslice = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
     if (timeslice && timeslice->expected_slice != U64_MAX &&
-        timeslice->count != U8_MAX && timeslice->expected_slice != 0)
+        timeslice->count != DEAD_TASK && timeslice->expected_slice != 0)
       return timeslice->expected_slice;
   }
 
@@ -1169,16 +1169,16 @@ void BPF_STRUCT_OPS(bpfland_stopping, struct task_struct *p, bool runnable) {
   if (slice > 0) {
     // bpf_printk("Task exiting: PID=%d, count=%llu", p->pid, slice);
     pid_t pid = p->pid;
-
+/*
     u64 predicted_ml_timeslice = get_ml_timeslice(pid);
-    if (predicted_ml_timeslice != DEFAULT_TIMESLICE_NS + 1) {
+    if (predicted_ml_timeslice != DEFAULT_TIMESLICE_NS ) {
       u64 bigger = MAX(predicted_ml_timeslice, slice);
       u64 smaller = MIN(predicted_ml_timeslice, slice);
       u64 time_delta_prec = bigger - smaller;
-      bpf_printk("Predicted and real timeslice: PID=%d, predicted=%llu, "
+      bpf_trace_printk("Predicted and real timeslice: PID=%d, predicted=%llu, "
                  "real=%llu, delta=%llu",
                  p->pid, predicted_ml_timeslice, slice, time_delta_prec);
-    }
+    }*/
 
     record_runtime(p->pid, slice);
   }
@@ -1470,7 +1470,7 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(bpfland_init) {
     if (!hist) {
       struct slice_ring_buffer bos_hist = {0};
       bos_hist.head = 0;
-      bos_hist.count = U8_MAX;
+      bos_hist.count = DEAD_TASK;
       bos_hist.expected_slice = U64_MAX;
       bos_hist.runtimes_in_ns[0] = 0;
       bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, &bos_hist,
@@ -1480,6 +1480,11 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(bpfland_init) {
       // bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
       // bpf_printk("Attempting to reset count: PID=%d, count=%p", pid,
       // test_hist );
+    }else{
+      hist->head = 0;
+      hist->count = DEAD_TASK;
+      hist->expected_slice = U64_MAX;
+      hist->runtimes_in_ns[0] = 0;
     }
   }
 
@@ -1502,7 +1507,7 @@ void BPF_STRUCT_OPS(bpfland_exit_task, struct task_struct *p,
     if (task_to_delete) {
       // bpf_printk("Task exiting:_ PID=%d, count=%d", pid,
       // task_to_delete->count);
-      task_to_delete->count = U8_MAX;
+      task_to_delete->count = DEAD_TASK;
 
       bpf_map_push_elem(&available_slots, &ret, 0);
     }
