@@ -9,7 +9,6 @@ mod stats;
 use std::ffi::{c_int, c_ulong};
 use std::fmt::Write;
 use std::mem::MaybeUninit;
-use std::slice;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -102,31 +101,6 @@ impl MmapedBpfArray {
             len: max_entries as usize,
             size: total_size,
         })
-    }
-
-    pub fn get(&self, idx: usize) -> Option<&SliceRingBuffer> {
-        if idx >= self.len {
-            return None;
-        }
-        unsafe { Some(&*self.ptr.add(idx)) }
-    }
-
-    /// Get a mutable reference to an entry at the given index
-    pub fn get_mut(&mut self, idx: usize) -> Option<&mut SliceRingBuffer> {
-        if idx >= self.len {
-            return None;
-        }
-        unsafe { Some(&mut *self.ptr.add(idx)) }
-    }
-
-    /// Get the entire array as a slice
-    pub fn as_slice(&self) -> &[SliceRingBuffer] {
-        unsafe { slice::from_raw_parts(self.ptr, self.len) }
-    }
-
-    /// Get the entire array as a mutable slice
-    pub fn as_mut_slice(&mut self) -> &mut [SliceRingBuffer] {
-        unsafe { slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 
     /// Access entry directly by index (panics if out of bounds)
@@ -504,7 +478,7 @@ impl<'a> Scheduler<'a> {
         let struct_ops = Some(scx_ops_attach!(skel, bpfland_ops)?);
         let stats_server = StatsServer::new(stats::server_data()).launch()?;
 
-        let mut mmap_array: MmapedBpfArray = MmapedBpfArray::new(map_fd, map_max_entries).unwrap();
+        let mmap_array: MmapedBpfArray = MmapedBpfArray::new(map_fd, map_max_entries).unwrap();
 
         Ok(Self {
             skel,
@@ -701,48 +675,48 @@ impl<'a> Scheduler<'a> {
         let mut active_slots: Vec<usize> = Vec::new();
         let len_of_array = self.mmap_array.len;
 
-        let (res_ch, req_ch) = self.stats_server.channels();
+        //let (res_ch, req_ch) = self.stats_server.channels();
         while !shutdown.load(Ordering::Relaxed) && !self.exited() {
             if self.refresh_sched_domain() {
                 self.user_restart = true;
                 break;
             }
 
-            match req_ch.recv_timeout(Duration::from_millis(10)) {
+            /* 
+            match req_ch.recv_timeout(Duration::from_millis(1000)) {
                 Ok(()) => res_ch.send(self.get_metrics())?,
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(e) => Err(e)?,
-            }
+            }*/
 
-            std::thread::sleep(Duration::from_millis(1000));
+            std::thread::sleep(Duration::from_millis(100));
 
             for ind in 0..len_of_array {
-                if self.mmap_array.index(ind).count != 250 as u8 {
-                    active_slots.push(ind); // init all to 255 in bpf!!!!!
+                if self.mmap_array.index(ind).count == 50 {
+                    active_slots.push(ind); // ilk başka 50 iken sonra killenen tasklara bakmıyo biraz sıkıntı ama olsun çok fark etmez
                     if active_slots.len() > 15 {
                         let mut selected_slots: Vec<[u64; 50]> = Vec::new();
                         let mut selected_slots_ind: Vec<usize> = Vec::new();
                         while active_slots.len() > 0 {
                             let cur_ind = active_slots.pop().unwrap();
-                            let history_ns: [u64; 50] =
-                                self.mmap_array.index(cur_ind).runtimes_in_ns;
+                            let mut history_ns: [u64; 50] = [0;50];
+                            let ring_idx: usize = self.mmap_array.index(cur_ind).head as usize;
+                            for ri_idx in  0..50 {
+                               history_ns[ri_idx] = self.mmap_array.index(cur_ind).runtimes_in_ns[(ri_idx+ring_idx) % 50];
+                            }
                             selected_slots.push(history_ns);
                             selected_slots_ind.push(cur_ind);
                             
                         }
                         let result_model: Vec<u64> =
                                 model_runner::predict(selected_slots.clone()).unwrap();
-                        //println!("predicted: {}", result_model[0]);
 
 
-                        print!("predicted :");
                         for cur_i in 0..16 {
 
                             self.mmap_array.index_mut(selected_slots_ind[cur_i]).expected_slice = result_model[cur_i];
-                            print!("{} ",self.mmap_array.index(selected_slots_ind[cur_i]).count)
 
                         }
-                        println!("");
 
 
 

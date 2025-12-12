@@ -681,9 +681,6 @@ static void record_runtime(pid_t pid, u64 slice_ns) {
     hist->head = 1;
     hist->count = 1;
     hist->expected_slice = U64_MAX;
-    for (u8 runt_idx = 1; runt_idx < 50; runt_idx++) {
-      hist->runtimes_in_ns[runt_idx] = slice_ns;
-    }
     hist->runtimes_in_ns[0] = slice_ns;
     return;
   }
@@ -1168,14 +1165,14 @@ void BPF_STRUCT_OPS(bpfland_stopping, struct task_struct *p, bool runnable) {
   /* ring bufferi güncelle */
   if (slice > 0) {
     // bpf_printk("Task exiting: PID=%d, count=%llu", p->pid, slice);
+    /*
     pid_t pid = p->pid;
-/*
     u64 predicted_ml_timeslice = get_ml_timeslice(pid);
     if (predicted_ml_timeslice != DEFAULT_TIMESLICE_NS ) {
       u64 bigger = MAX(predicted_ml_timeslice, slice);
       u64 smaller = MIN(predicted_ml_timeslice, slice);
       u64 time_delta_prec = bigger - smaller;
-      bpf_trace_printk("Predicted and real timeslice: PID=%d, predicted=%llu, "
+      bpf_printk("Predicted and real timeslice: PID=%d, predicted=%llu, "
                  "real=%llu, delta=%llu",
                  p->pid, predicted_ml_timeslice, slice, time_delta_prec);
     }*/
@@ -1509,7 +1506,7 @@ void BPF_STRUCT_OPS(bpfland_exit_task, struct task_struct *p,
       // task_to_delete->count);
       task_to_delete->count = DEAD_TASK;
 
-      bpf_map_push_elem(&available_slots, &ret, 0);
+      bpf_map_push_elem(&available_slots, ret, 0);
     }
   }
 }

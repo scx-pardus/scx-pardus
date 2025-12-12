@@ -30,7 +30,7 @@ fn init_model(model_path: &str) -> Result<Session, AppError> {
     let model_data = std::fs::read(model_path)?;
     let session = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
-        .with_intra_threads(4)?
+        .with_intra_threads(1)?
         .commit_from_memory(&model_data)?;
 
     Ok(session)
