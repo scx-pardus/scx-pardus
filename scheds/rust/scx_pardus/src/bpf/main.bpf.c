@@ -2,21 +2,19 @@
 /*
  * Copyright (c) 2024 Andrea Righi <andrea.righi@linux.dev>
  */
- #include <scx/common.bpf.h>
- #include <scx/percpu.bpf.h>
- #include "intf.h"
+#include "intf.h"
+#include <scx/common.bpf.h>
+#include <scx/percpu.bpf.h>
 
 #define U64_MAX 18446744073709551615ULL
 
 #define U8_MAX 255
-
 
 /*
  * Maximum time a task can wait in the scheduler's queue before triggering
  * a stall.
  */
 #define STARVATION_MS 5000ULL
-
 
 /*
  * Maximum amount of CPUs supported by the scheduler when flat or preferred
@@ -153,7 +151,6 @@ static inline void set_throttled(bool state) {
   WRITE_ONCE(cpus_throttled, state);
 }
 
-
 /*
  * Exit information.
  */
@@ -260,21 +257,20 @@ struct {
   __type(value, struct slice_ring_buffer);
 } slice_ring_buffer_array SEC(".maps");
 
-
 // PID ---> array indeksine çevirmek için map
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, PREDICTION_ARRAY_SIZE);
-    __type(key, pid_t); 
-    __type(value, u32); 
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, PREDICTION_ARRAY_SIZE);
+  __type(key, pid_t);
+  __type(value, u32);
 } pid_to_idx SEC(".maps");
 
 // Arraydeki boş indisleri takip etmek için stack
 struct {
-    __uint(type, BPF_MAP_TYPE_STACK);
-    __uint(max_entries, PREDICTION_ARRAY_SIZE);
-    __type(value, u32);
-    __uint(map_flags, BPF_F_RDONLY);
+  __uint(type, BPF_MAP_TYPE_STACK);
+  __uint(max_entries, PREDICTION_ARRAY_SIZE);
+  __type(value, u32);
+  __uint(map_flags, BPF_F_RDONLY);
 } available_slots SEC(".maps");
 
 /*
@@ -647,90 +643,67 @@ static const u64 DEFAULT_TIMESLICE_NS = 3000000;
 
 /* BPF Map'e yeni slice ekleme fonksiyonu */
 static void record_runtime(pid_t pid, u64 slice_ns) {
-  u32  array_idx = 0;
-  u32 * array_idx_ptr = bpf_map_lookup_elem(&pid_to_idx, &pid);
+  u32 array_idx = 0;
+  u32 *array_idx_ptr = bpf_map_lookup_elem(&pid_to_idx, &pid);
   struct slice_ring_buffer *hist = NULL;
 
-  if(array_idx_ptr){
+  if (array_idx_ptr) {
     array_idx = *array_idx_ptr;
   }
 
-
-  if(!array_idx_ptr){
+  if (!array_idx_ptr) {
     bpf_map_pop_elem(&available_slots, &array_idx);
 
     bpf_map_update_elem(&pid_to_idx, &pid, &array_idx, BPF_ANY);
-    
   }
-  hist = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
-  
-  if (!hist) {
-    struct slice_ring_buffer bos_hist = {0};
-    bos_hist.head = 1;
-    bos_hist.count = 1;
-    bos_hist.expected_slice = U64_MAX;
-    bos_hist.runtimes_in_ns[0] = slice_ns;
-    bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, &bos_hist, BPF_ANY);
-    //bpf_printk("Init runtime tracking: PID=%d, comm=%llu", pid, slice_ns);
-    //struct slice_ring_buffer * test_hist =  bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
-    //bpf_printk("Attempting to reset count: PID=%d, count=%p", pid, test_hist );
-    return;
-  }
-  
-  if(hist->count == U8_MAX ){
-    //bpf_printk("Attempting to reset count: PID=%d, count=%u", pid, hist->count);
+
+  if (hist->count == U8_MAX) {
+    // bpf_printk("Attempting to reset count: PID=%d, count=%u", pid,
+    // hist->count);
     hist->head = 1;
     hist->count = 1;
     hist->expected_slice = U64_MAX;
-    for(u8 runt_idx = 1; runt_idx < 50; runt_idx++){
-    hist->runtimes_in_ns[runt_idx] = slice_ns;
+    for (u8 runt_idx = 1; runt_idx < 50; runt_idx++) {
+      hist->runtimes_in_ns[runt_idx] = slice_ns;
     }
     hist->runtimes_in_ns[0] = slice_ns;
     return;
-
   }
 
-
-  
-  if (hist->head>=RUNTIME_HISTORY_SIZE){
-    hist->head=0;
-    
+  if (hist->head >= RUNTIME_HISTORY_SIZE) {
+    hist->head = 0;
   }
-  
+
   u8 idx = hist->head;
-  
+
   hist->runtimes_in_ns[idx] = slice_ns;
-  
+
   hist->head++;
   if (hist->count < RUNTIME_HISTORY_SIZE) {
     hist->count++;
   }
-  
-  //bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, hist, BPF_ANY);
 
-
+  // bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, hist, BPF_ANY);
 }
 
-
 /* Model tarafından verilen time slice değerini almak için fonksiyon */
-static u64 get_ml_timeslice(pid_t pid)
-{
-    struct slice_ring_buffer *timeslice;
-    u32 array_idx = 0;
-    u32 * array_idx_ptr =  bpf_map_lookup_elem(&pid_to_idx, &pid);
+static u64 get_ml_timeslice(pid_t pid) {
+  struct slice_ring_buffer *timeslice;
+  u32 array_idx = 0;
+  u32 *array_idx_ptr = bpf_map_lookup_elem(&pid_to_idx, &pid);
 
-    if(array_idx_ptr){
-      array_idx = *array_idx_ptr;
-    }
+  if (array_idx_ptr) {
+    array_idx = *array_idx_ptr;
+  }
 
-    if(array_idx){
-      timeslice = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
-      if (timeslice && timeslice->expected_slice != U64_MAX && timeslice->count != U8_MAX && timeslice->expected_slice != 0)
-        return timeslice->expected_slice;
-    }
-    
-       
-    return DEFAULT_TIMESLICE_NS;
+  if (array_idx) {
+    timeslice = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
+    if (timeslice && timeslice->expected_slice != U64_MAX &&
+        timeslice->count != U8_MAX && timeslice->expected_slice != 0)
+      return timeslice->expected_slice;
+  }
+
+  return DEFAULT_TIMESLICE_NS;
 }
 
 /*
@@ -798,7 +771,6 @@ static u64 task_dl(struct task_struct *p, s32 cpu, struct task_ctx *tctx) {
    */
   if (time_after(tctx->awake_vtime, awake_max))
     tctx->awake_vtime = awake_max;
-
 
   // ML Modelinden alınan timeslice kısmı
 
@@ -1175,20 +1147,20 @@ void BPF_STRUCT_OPS(bpfland_stopping, struct task_struct *p, bool runnable) {
    */
   slice = now - tctx->last_run_at;
 
-
   /* ring bufferi güncelle */
   if (slice > 0) {
-     //bpf_printk("Task exiting: PID=%d, count=%llu", p->pid, slice);
-     pid_t pid = p->pid;
+    // bpf_printk("Task exiting: PID=%d, count=%llu", p->pid, slice);
+    pid_t pid = p->pid;
 
-     u64 predicted_ml_timeslice = get_ml_timeslice(pid);
-     if(predicted_ml_timeslice != DEFAULT_TIMESLICE_NS+1){
+    u64 predicted_ml_timeslice = get_ml_timeslice(pid);
+    if (predicted_ml_timeslice != DEFAULT_TIMESLICE_NS + 1) {
       u64 bigger = MAX(predicted_ml_timeslice, slice);
       u64 smaller = MIN(predicted_ml_timeslice, slice);
       u64 time_delta_prec = bigger - smaller;
-      bpf_printk("Predicted and real timeslice: PID=%d, predicted=%llu, real=%llu, delta=%llu", p->pid, predicted_ml_timeslice, slice, time_delta_prec);
-     }
-     
+      bpf_printk("Predicted and real timeslice: PID=%d, predicted=%llu, "
+                 "real=%llu, delta=%llu",
+                 p->pid, predicted_ml_timeslice, slice, time_delta_prec);
+    }
 
     record_runtime(p->pid, slice);
   }
@@ -1251,10 +1223,6 @@ s32 BPF_STRUCT_OPS(bpfland_init_task, struct task_struct *p,
                               BPF_LOCAL_STORAGE_GET_F_CREATE);
   if (!tctx)
     return -ENOMEM;
-
-  
-
-  
 
   return 0;
 }
@@ -1476,10 +1444,28 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(bpfland_init) {
     }
   }
 
-  for (u32 bos_idx = 0; bos_idx< PREDICTION_ARRAY_SIZE ; bos_idx++){
+  for (u32 bos_idx = 0; bos_idx < PREDICTION_ARRAY_SIZE; bos_idx++) {
     bpf_map_push_elem(&available_slots, &bos_idx, 0);
   }
-  
+
+  for (u32 array_idx = 0; array_idx < PREDICTION_ARRAY_SIZE; array_idx++) {
+    hist = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
+
+    if (!hist) {
+      struct slice_ring_buffer bos_hist = {0};
+      bos_hist.head = 1;
+      bos_hist.count = 1;
+      bos_hist.expected_slice = U64_MAX;
+      bos_hist.runtimes_in_ns[0] = slice_ns;
+      bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, &bos_hist,
+                          BPF_ANY);
+      // bpf_printk("Init runtime tracking: PID=%d, comm=%llu", pid, slice_ns);
+      // struct slice_ring_buffer * test_hist =
+      // bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
+      // bpf_printk("Attempting to reset count: PID=%d, count=%p", pid,
+      // test_hist );
+    }
+  }
 
   return 0;
 }
@@ -1488,42 +1474,30 @@ void BPF_STRUCT_OPS(bpfland_exit, struct scx_exit_info *ei) {
   UEI_RECORD(uei, ei);
 }
 
-void BPF_STRUCT_OPS(bpfland_exit_task, struct task_struct *p, struct scx_exit_task_args *args)
-{
-    pid_t pid = p->pid;
-    
+void BPF_STRUCT_OPS(bpfland_exit_task, struct task_struct *p,
+                    struct scx_exit_task_args *args) {
+  pid_t pid = p->pid;
 
-    u32 * ret = bpf_map_lookup_elem(&pid_to_idx, &pid);
+  u32 *ret = bpf_map_lookup_elem(&pid_to_idx, &pid);
 
-   
+  if (ret) {
+    struct slice_ring_buffer *task_to_delete =
+        bpf_map_lookup_elem(&slice_ring_buffer_array, ret);
+    if (task_to_delete) {
+      // bpf_printk("Task exiting:_ PID=%d, count=%d", pid,
+      // task_to_delete->count);
+      task_to_delete->count = U8_MAX;
 
-
-
-    if(ret){
-      struct slice_ring_buffer * task_to_delete = bpf_map_lookup_elem(&slice_ring_buffer_array,ret);
-      if(task_to_delete){
-        //bpf_printk("Task exiting:_ PID=%d, count=%d", pid, task_to_delete->count);
-        task_to_delete->count = U8_MAX;
-
-        bpf_map_push_elem(&available_slots, &ret, 0);
-      }
-
+      bpf_map_push_elem(&available_slots, &ret, 0);
     }
-    
+  }
 }
 
-SCX_OPS_DEFINE(bpfland_ops, .select_cpu = (void *)bpfland_select_cpu,
-               .enqueue = (void *)bpfland_enqueue,
-               .dispatch = (void *)bpfland_dispatch,
-               .running = (void *)bpfland_running,
-               .stopping = (void *)bpfland_stopping,
-               .runnable = (void *)bpfland_runnable,
-               .enable = (void *)bpfland_enable,
-               .init_task = (void *)bpfland_init_task,
-               .init = (void *)bpfland_init, .exit = (void *)bpfland_exit,
-               .exit_task = (void *)bpfland_exit_task, 
-               .timeout_ms = STARVATION_MS, .name = "bpfland");
-
-
-
-
+SCX_OPS_DEFINE(
+    bpfland_ops, .select_cpu = (void *)bpfland_select_cpu,
+    .enqueue = (void *)bpfland_enqueue, .dispatch = (void *)bpfland_dispatch,
+    .running = (void *)bpfland_running, .stopping = (void *)bpfland_stopping,
+    .runnable = (void *)bpfland_runnable, .enable = (void *)bpfland_enable,
+    .init_task = (void *)bpfland_init_task, .init = (void *)bpfland_init,
+    .exit = (void *)bpfland_exit, .exit_task = (void *)bpfland_exit_task,
+    .timeout_ms = STARVATION_MS, .name = "bpfland");
