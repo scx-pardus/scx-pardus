@@ -1,4 +1,5 @@
 mod bpf_skel;
+pub mod model_runner;
 pub use bpf_skel::*;
 pub mod bpf_intf;
 pub use bpf_intf::*;
@@ -8,13 +9,11 @@ mod stats;
 use std::ffi::{c_int, c_ulong};
 use std::fmt::Write;
 use std::mem::MaybeUninit;
+use std::slice;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
-use std::os::unix::io::RawFd;
-use std::slice;
-use libc::{mmap, PROT_READ, PROT_WRITE, MAP_SHARED};
 
 use anyhow::anyhow;
 use anyhow::bail;
@@ -22,8 +21,8 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use crossbeam::channel::RecvTimeoutError;
-use libbpf_rs::{AsRawLibbpf, MapCore, OpenObject};
 use libbpf_rs::ProgramInput;
+use libbpf_rs::{AsRawLibbpf, MapCore, OpenObject};
 use log::warn;
 use log::{debug, info};
 use scx_stats::prelude::*;
@@ -47,15 +46,15 @@ use stats::Metrics;
 
 const SCHEDULER_NAME: &str = "scx_pardus";
 const RUNTIME_HISTORY_SIZE: usize = 50;
-const PREDICTION_ARRAY_SIZE: usize = 4096;
+//const PREDICTION_ARRAY_SIZE: usize = 4096;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SliceRingBuffer {
     pub head: u8,
     pub count: u8,
-    _padding: [u8; 6], 
-    pub runtimes_in_ns: [u64; RUNTIME_HISTORY_SIZE], 
+    _padding: [u8; 6],
+    pub runtimes_in_ns: [u64; RUNTIME_HISTORY_SIZE],
     pub expected_slice: u64,
 }
 
@@ -71,23 +70,18 @@ impl Default for SliceRingBuffer {
     }
 }
 
-
-
 struct MmapedBpfArray {
     ptr: *mut SliceRingBuffer,
     len: usize,
-    size: usize, 
+    size: usize,
 }
 
 impl MmapedBpfArray {
     pub fn new(fd: i32, max_entries: usize) -> Result<Self, Box<dyn std::error::Error>> {
-     
-        
         let entry_size = std::mem::size_of::<SliceRingBuffer>();
-        println!("max entry size: {}" , entry_size);
 
         let total_size = entry_size * max_entries as usize;
-        
+
         let ptr = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -98,25 +92,25 @@ impl MmapedBpfArray {
                 0,
             )
         };
-        
+
         if ptr == libc::MAP_FAILED {
             return Err(format!("mmap failed: {}", std::io::Error::last_os_error()).into());
         }
-        
+
         Ok(Self {
             ptr: ptr as *mut SliceRingBuffer,
             len: max_entries as usize,
             size: total_size,
         })
     }
-    
+
     pub fn get(&self, idx: usize) -> Option<&SliceRingBuffer> {
         if idx >= self.len {
             return None;
         }
         unsafe { Some(&*self.ptr.add(idx)) }
     }
-    
+
     /// Get a mutable reference to an entry at the given index
     pub fn get_mut(&mut self, idx: usize) -> Option<&mut SliceRingBuffer> {
         if idx >= self.len {
@@ -124,23 +118,23 @@ impl MmapedBpfArray {
         }
         unsafe { Some(&mut *self.ptr.add(idx)) }
     }
-    
+
     /// Get the entire array as a slice
     pub fn as_slice(&self) -> &[SliceRingBuffer] {
         unsafe { slice::from_raw_parts(self.ptr, self.len) }
     }
-    
+
     /// Get the entire array as a mutable slice
     pub fn as_mut_slice(&mut self) -> &mut [SliceRingBuffer] {
         unsafe { slice::from_raw_parts_mut(self.ptr, self.len) }
     }
-    
+
     /// Access entry directly by index (panics if out of bounds)
     pub fn index(&self, idx: usize) -> &SliceRingBuffer {
         assert!(idx < self.len, "index out of bounds");
         unsafe { &*self.ptr.add(idx) }
     }
-    
+
     /// Access entry mutably by index (panics if out of bounds)
     pub fn index_mut(&mut self, idx: usize) -> &mut SliceRingBuffer {
         assert!(idx < self.len, "index out of bounds");
@@ -425,7 +419,6 @@ impl<'a> Scheduler<'a> {
         let open_opts = opts.libbpf.clone().into_bpf_open_opts();
         let mut skel = scx_ops_open!(skel_builder, open_object, bpfland_ops, open_opts)?;
 
-
         skel.struct_ops.bpfland_ops_mut().exit_dump_len = opts.exit_dump_len;
 
         // Override default BPF scheduling parameters.
@@ -478,11 +471,10 @@ impl<'a> Scheduler<'a> {
         // Load the BPF program for validation.
         let mut skel = scx_ops_load!(skel, bpfland_ops, uei)?;
 
-        
         let map_object = skel.maps.slice_ring_buffer_array.as_libbpf_object();
         let raw_mut: *mut bpf_map = map_object.as_ptr();
         let raw_const: *const bpf_map = raw_mut as *const bpf_map;
-        let map_fd: i32 = unsafe{bpf_map__fd(raw_const)}; 
+        let map_fd: i32 = unsafe { bpf_map__fd(raw_const) };
         //println!("map fd: {}",map_fd);
         let map_max_entries: usize = skel.maps.slice_ring_buffer_array.max_entries() as usize;
 
@@ -513,9 +505,6 @@ impl<'a> Scheduler<'a> {
         let stats_server = StatsServer::new(stats::server_data()).launch()?;
 
         let mut mmap_array: MmapedBpfArray = MmapedBpfArray::new(map_fd, map_max_entries).unwrap();
-
-        
-
 
         Ok(Self {
             skel,
@@ -709,16 +698,53 @@ impl<'a> Scheduler<'a> {
     }
 
     fn run(&mut self, shutdown: Arc<AtomicBool>) -> Result<UserExitInfo> {
+        let mut active_slots: Vec<usize> = Vec::new();
+        let len_of_array = self.mmap_array.len;
+
         let (res_ch, req_ch) = self.stats_server.channels();
         while !shutdown.load(Ordering::Relaxed) && !self.exited() {
             if self.refresh_sched_domain() {
                 self.user_restart = true;
                 break;
             }
-            match req_ch.recv_timeout(Duration::from_secs(1)) {
+
+            match req_ch.recv_timeout(Duration::from_millis(10)) {
                 Ok(()) => res_ch.send(self.get_metrics())?,
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(e) => Err(e)?,
+            }
+
+            std::thread::sleep(Duration::from_millis(1000));
+
+            for ind in 0..len_of_array {
+                if self.mmap_array.index(ind).count != 255 {
+                    active_slots.push(ind); // init all to 255 in bpf!!!!!
+                    if active_slots.len() > 15 {
+                        let mut selected_slots: Vec<[u64; 50]> = Vec::new();
+                        let mut selected_slots_ind: Vec<usize> = Vec::new();
+                        while active_slots.len() > 0 {
+                            let cur_ind = active_slots.pop().unwrap();
+                            let history_ns: [u64; 50] =
+                                self.mmap_array.index(cur_ind).runtimes_in_ns;
+                            selected_slots.push(history_ns);
+                            selected_slots_ind.push(cur_ind);
+                            
+                        }
+                        let result_model: Vec<u64> =
+                                model_runner::predict(selected_slots.clone()).unwrap();
+                        //println!("predicted: {}", result_model[0]);
+
+                        for cur_i in 0..16 {
+
+                            self.mmap_array.index_mut(selected_slots_ind[cur_i]).expected_slice = result_model[cur_i];
+
+                        }
+
+
+
+                        
+                    }
+                }
             }
         }
 
@@ -804,6 +830,8 @@ fn main() -> Result<()> {
         }
     }
 
+    let _ = model_runner::init();
+
     let mut open_object = MaybeUninit::uninit();
     loop {
         let mut sched = Scheduler::init(&opts, &mut open_object)?;
@@ -814,10 +842,7 @@ fn main() -> Result<()> {
             }
             break;
         }
-        
     }
-
-    
 
     Ok(())
 }
