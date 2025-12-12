@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "scheds/rust/scx_bpfland",
+    "scheds/rust/scx_pardus",
 ]
 resolver = "2"
 

@@ -1,10 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
-//
-// Copyright (c) 2024 Andrea Righi <andrea.righi@linux.dev>
-
-// This software may be used and distributed according to the terms of the
-// GNU General Public License version 2.
-
 mod bpf_skel;
 pub use bpf_skel::*;
 pub mod bpf_intf;
@@ -48,7 +41,7 @@ use scx_utils::UserExitInfo;
 use scx_utils::NR_CPU_IDS;
 use stats::Metrics;
 
-const SCHEDULER_NAME: &str = "scx_bpfland";
+const SCHEDULER_NAME: &str = "scx_pardus";
 
 #[derive(PartialEq)]
 enum Powermode {
@@ -66,10 +59,8 @@ fn get_primary_cpus(mode: Powermode) -> std::io::Result<Vec<usize>> {
         .values()
         .flat_map(|core| &core.cpus)
         .filter_map(|(cpu_id, cpu)| match (&mode, &cpu.core_type) {
-            // Performance mode: add all the Big CPUs (either Turbo or non-Turbo)
-            (Powermode::Performance, CoreType::Big { .. }) |
-            // Powersave mode: add all the Little CPUs
-            (Powermode::Powersave, CoreType::Little) => Some(*cpu_id),
+            (Powermode::Performance, CoreType::Big { .. })
+            | (Powermode::Powersave, CoreType::Little) => Some(*cpu_id),
             (Powermode::Any, ..) => Some(*cpu_id),
             _ => None,
         })
@@ -78,26 +69,21 @@ fn get_primary_cpus(mode: Powermode) -> std::io::Result<Vec<usize>> {
     Ok(cpus)
 }
 
-// Convert an array of CPUs to the corresponding cpumask of any arbitrary size.
 fn cpus_to_cpumask(cpus: &Vec<usize>) -> String {
     if cpus.is_empty() {
         return String::from("none");
     }
 
-    // Determine the maximum CPU ID to create a sufficiently large byte vector.
     let max_cpu_id = *cpus.iter().max().unwrap();
 
-    // Create a byte vector with enough bytes to cover all CPU IDs.
     let mut bitmask = vec![0u8; (max_cpu_id + 1 + 7) / 8];
 
-    // Set the appropriate bits for each CPU ID.
     for cpu_id in cpus {
         let byte_index = cpu_id / 8;
         let bit_index = cpu_id % 8;
         bitmask[byte_index] |= 1 << bit_index;
     }
 
-    // Convert the byte vector to a hexadecimal string.
     let hex_str: String = bitmask.iter().rev().fold(String::new(), |mut f, byte| {
         let _ = write!(&mut f, "{:02x}", byte);
         f
@@ -106,13 +92,13 @@ fn cpus_to_cpumask(cpus: &Vec<usize>) -> String {
     format!("0x{}", hex_str)
 }
 
-/// scx_bpfland: a vruntime-based sched_ext scheduler that prioritizes interactive workloads.
+/// scx_pardus: vruntime ve ML tabanlı bir CPU zamanlayıcısı
 ///
-/// This scheduler is derived from scx_rustland, but it is fully implemented in BPF. It has a minimal
-/// user-space part written in Rust to process command line options, collect metrics and log out
-/// scheduling statistics.
-///
-/// The BPF part makes all the scheduling decisions (see src/bpf/main.bpf.c).
+/// scx_rustland ve scx_bpfland tabanını kullanan ve BPF mapleri ile kernel tarafı iletişimini
+/// yapan bir zamanlayıcı. Kullanıcı tarafı minimaldir ve sadece ML modelini çalıştırır,
+/// zamanlayıcı kararlarını vermez. İletişim asenkron olarak gerçekleşir. Model çıktılarını
+/// eBPF maplerine yazar ve pid'yi key olarak kullanarak BPF tarafı bunları okur. Bu işlem
+/// kurulduktan sonra syscall kullanmaz ve performans kaybetmez.
 #[derive(Debug, Parser)]
 struct Opts {
     /// Exit debug dump buffer length. 0 indicates default.
