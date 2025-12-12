@@ -2,9 +2,9 @@
 /*
  * Copyright (c) 2024 Andrea Righi <andrea.righi@linux.dev>
  */
-#include "intf.h"
-#include <scx/common.bpf.h>
-#include <scx/percpu.bpf.h>
+ #include <scx/common.bpf.h>
+ #include <scx/percpu.bpf.h>
+ #include "intf.h"
 
 #define U64_MAX 18446744073709551615ULL
 
@@ -656,6 +656,23 @@ static void record_runtime(pid_t pid, u64 slice_ns) {
 
     bpf_map_update_elem(&pid_to_idx, &pid, &array_idx, BPF_ANY);
   }
+
+  hist = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
+
+    if (!hist) {
+      struct slice_ring_buffer bos_hist = {0};
+      bos_hist.head = 0;
+      bos_hist.count = U8_MAX;
+      bos_hist.expected_slice = U64_MAX;
+      bos_hist.runtimes_in_ns[0] = slice_ns;
+      bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, &bos_hist,
+                          BPF_ANY);
+      // bpf_printk("Init runtime tracking: PID=%d, comm=%llu", pid, slice_ns);
+      // struct slice_ring_buffer * test_hist =
+      // bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
+      // bpf_printk("Attempting to reset count: PID=%d, count=%p", pid,
+      // test_hist );
+    }
 
   if (hist->count == U8_MAX) {
     // bpf_printk("Attempting to reset count: PID=%d, count=%u", pid,
@@ -1444,19 +1461,17 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(bpfland_init) {
     }
   }
 
-  for (u32 bos_idx = 0; bos_idx < PREDICTION_ARRAY_SIZE; bos_idx++) {
-    bpf_map_push_elem(&available_slots, &bos_idx, 0);
-  }
-
   for (u32 array_idx = 0; array_idx < PREDICTION_ARRAY_SIZE; array_idx++) {
-    hist = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
+    bpf_map_push_elem(&available_slots, &array_idx, 0);
+  
+    struct slice_ring_buffer * hist = bpf_map_lookup_elem(&slice_ring_buffer_array, &array_idx);
 
     if (!hist) {
       struct slice_ring_buffer bos_hist = {0};
-      bos_hist.head = 1;
-      bos_hist.count = 1;
+      bos_hist.head = 0;
+      bos_hist.count = U8_MAX;
       bos_hist.expected_slice = U64_MAX;
-      bos_hist.runtimes_in_ns[0] = slice_ns;
+      bos_hist.runtimes_in_ns[0] = 0;
       bpf_map_update_elem(&slice_ring_buffer_array, &array_idx, &bos_hist,
                           BPF_ANY);
       // bpf_printk("Init runtime tracking: PID=%d, comm=%llu", pid, slice_ns);
