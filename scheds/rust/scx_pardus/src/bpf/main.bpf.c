@@ -1165,7 +1165,7 @@ void BPF_STRUCT_OPS(bpfland_stopping, struct task_struct *p, bool runnable) {
   /* ring bufferi güncelle */
   if (slice > 0) {
     // bpf_printk("Task exiting: PID=%d, count=%llu", p->pid, slice);
-    /*
+    
     pid_t pid = p->pid;
     u64 predicted_ml_timeslice = get_ml_timeslice(pid);
     if (predicted_ml_timeslice != DEFAULT_TIMESLICE_NS ) {
@@ -1175,7 +1175,7 @@ void BPF_STRUCT_OPS(bpfland_stopping, struct task_struct *p, bool runnable) {
       bpf_printk("Predicted and real timeslice: PID=%d, predicted=%llu, "
                  "real=%llu, delta=%llu",
                  p->pid, predicted_ml_timeslice, slice, time_delta_prec);
-    }*/
+    }
 
     record_runtime(p->pid, slice);
   }
