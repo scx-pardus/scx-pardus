@@ -242,10 +242,10 @@ struct {
 /* Ring buffer, expected_size kısmı userspacedeki ML modeli tarafından
  * doldurulacak */
 struct slice_ring_buffer {
-  u8 head;
-  u8 count;
   u64 runtimes_in_ns[RUNTIME_HISTORY_SIZE];
   u64 expected_slice;
+  u8 head;
+  u8 count;
 };
 
 /* Runtime sliceleri tutmak için gereken bpf array */

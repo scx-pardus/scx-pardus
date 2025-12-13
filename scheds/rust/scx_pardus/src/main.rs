@@ -50,21 +50,19 @@ const RUNTIME_HISTORY_SIZE: usize = 50;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SliceRingBuffer {
-    pub head: u8,
-    pub count: u8,
-    _padding: [u8; 6],
     pub runtimes_in_ns: [u64; RUNTIME_HISTORY_SIZE],
     pub expected_slice: u64,
+    pub head: u8,
+    pub count: u8,
 }
 
 impl Default for SliceRingBuffer {
     fn default() -> Self {
         Self {
-            head: 0,
-            count: 0,
-            _padding: [0; 6],
             runtimes_in_ns: [0; RUNTIME_HISTORY_SIZE],
             expected_slice: 0,
+            head: 0,
+            count: 0,
         }
     }
 }
