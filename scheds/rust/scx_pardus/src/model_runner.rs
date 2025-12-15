@@ -39,30 +39,49 @@ fn init_model(model_path: &str) -> Result<Session, AppError> {
 fn run_model(
     tcn: &mut Session,
     xgboost: &mut Session,
-    mut input: Vec<f32>,
+    input: Vec<f32>,
     shape_tcn: [usize; 3],
     shape_xgb: [usize; 2],
 ) -> Result<Vec<f32>, ort::Error> {
+    let batch_size = shape_tcn[0];
+    let features_per_sample = shape_tcn[1];
     let eps = 1e-12;
 
-    let min = input.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-    let max = input.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-    let range = max - min;
+    let mut norm_info = Vec::with_capacity(batch_size);
+    let mut normalized_input = input.clone();
 
-    if range < eps {
-        for v in &mut input {
-            *v = 0.0;
+    for i in 0..batch_size {
+        let start_idx = i * features_per_sample;
+        let end_idx = start_idx + features_per_sample;
+
+        if end_idx > input.len() {
+            break;
         }
-    } else {
-        for v in &mut input {
-            *v = (*v - min) / (range + eps);
+
+        let sample_slice = &input[start_idx..end_idx];
+
+        let min = sample_slice.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+        let max = sample_slice.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let range = max - min;
+
+        norm_info.push(NormalizationInfo { min, range });
+
+        let norm_slice = &mut normalized_input[start_idx..end_idx];
+        if range < eps {
+            for v in norm_slice.iter_mut() {
+                *v = 0.0;
+            }
+        } else {
+            for v in norm_slice.iter_mut() {
+                *v = (*v - min) / (range + eps);
+            }
         }
     }
 
-    let tensor_tcn: Tensor<f32> = Tensor::from_array((shape_tcn, input.clone()))?;
-    let tensor_xgb: Tensor<f32> = Tensor::from_array((shape_xgb, input))?;
+    let tensor_tcn: Tensor<f32> = Tensor::from_array((shape_tcn, normalized_input.clone()))?;
+    let tensor_xgb: Tensor<f32> = Tensor::from_array((shape_xgb, normalized_input))?;
 
-    let t_in: String = tcn.inputs[0].name.clone();
+    let t_in = tcn.inputs[0].name.clone();
     let t_out = tcn.outputs[0].name.clone();
     let x_in = xgboost.inputs[0].name.clone();
     let x_out = xgboost.outputs[0].name.clone();
@@ -79,18 +98,24 @@ fn run_model(
         *tp += *xp;
     }
 
-    if range < eps {
-        for v in &mut t_pred {
-            *v = min;
+    let mut denormalized_pred = Vec::with_capacity(t_pred.len());
+
+    if t_pred.len() == batch_size {
+        for (i, info) in norm_info.iter().enumerate() {
+            let pred_value = t_pred[i];
+            if info.range < eps {
+                denormalized_pred.push(info.min);
+            } else {
+                denormalized_pred.push(pred_value * (info.range + eps) + info.min);
+            }
         }
     } else {
-        for v in &mut t_pred {
-            *v = *v * (range + eps) + min;
-        }
+        denormalized_pred = t_pred;
     }
 
-    Ok(t_pred)
+    Ok(denormalized_pred)
 }
+
 
 pub fn predict(inputs: Vec<[u64; 50]>) -> Result<Vec<u64>, ort::Error> {
     let n = 16;
