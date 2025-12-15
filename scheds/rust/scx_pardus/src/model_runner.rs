@@ -35,6 +35,10 @@ fn init_model(model_path: &str) -> Result<Session, AppError> {
 
     Ok(session)
 }
+struct NormalizationInfo {
+    min: f32,
+    range: f32,
+}
 
 fn run_model(
     tcn: &mut Session,
