@@ -639,7 +639,7 @@ static int calloc_cpumask(struct bpf_cpumask **p_cpumask) {
 }
 
 /* ML modelinin dönüş yapmadığı durumlardaki varsayılan slice */
-static const u64 DEFAULT_TIMESLICE_NS = 300000ULL;
+static const u64 DEFAULT_TIMESLICE_NS = 3000000ULL;
 
 /* BPF Map'e yeni slice ekleme fonksiyonu */
 static void record_runtime(pid_t pid, u64 slice_ns) {
