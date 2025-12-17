@@ -148,8 +148,8 @@ pub fn predict(inputs: Vec<[u64; 50]>) -> Result<Vec<u64>, ort::Error> {
 }
 
 pub fn init() -> Result<(), AppError> {
-    let tcn_path = "/home/deniz/scx-pardus/scheds/rust/scx_pardus/src/res/model.onnx";
-    let xgboost_path = "/home/deniz/scx-pardus/scheds/rust/scx_pardus/src/res/xgboost.onnx";
+    let tcn_path = "./scheds/rust/scx_pardus/src/res/model.onnx";
+    let xgboost_path = "./scheds/rust/scx_pardus/src/res/xgboost.onnx";
 
     let tcn_model: Session = init_model(tcn_path)?;
     let xgb_model: Session = init_model(xgboost_path)?;
