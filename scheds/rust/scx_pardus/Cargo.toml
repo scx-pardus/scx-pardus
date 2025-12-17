@@ -19,8 +19,7 @@ simplelog = "0.12"
 libbpf-sys = "1.4"
 libc = "0.2.178"
 ndarray = { version = "0.16", default-features = false, features = ["std"] }
-ort = { version = "2.0.0-rc.10", default-features = false, features = ["ndarray", "download-binaries"] }
-
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["ndarray"] }
 
 [build-dependencies]
 scx_cargo = { path = "../../../rust/scx_cargo", version = "1.0.25" }

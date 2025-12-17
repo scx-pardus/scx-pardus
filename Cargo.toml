@@ -5,9 +5,13 @@ members = [
 resolver = "2"
 
 [profile.release]
-lto = "thin"
-strip = true
+opt-level = "z"
+debug  = false
+lto = true
+strip = "symbols"
 incremental = true
 codegen-units = 1
+
+
 
 
