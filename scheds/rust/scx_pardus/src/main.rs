@@ -19,7 +19,6 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
-use crossbeam::channel::RecvTimeoutError;
 use libbpf_rs::ProgramInput;
 use libbpf_rs::{AsRawLibbpf, MapCore, OpenObject};
 use log::warn;
@@ -680,7 +679,7 @@ impl<'a> Scheduler<'a> {
                 break;
             }
 
-            /* 
+            /*
             match req_ch.recv_timeout(Duration::from_millis(1000)) {
                 Ok(()) => res_ch.send(self.get_metrics())?,
                 Err(RecvTimeoutError::Timeout) => {}
@@ -697,28 +696,23 @@ impl<'a> Scheduler<'a> {
                         let mut selected_slots_ind: Vec<usize> = Vec::new();
                         while active_slots.len() > 0 {
                             let cur_ind = active_slots.pop().unwrap();
-                            let mut history_ns: [u64; 50] = [0;50];
+                            let mut history_ns: [u64; 50] = [0; 50];
                             let ring_idx: usize = self.mmap_array.index(cur_ind).head as usize;
-                            for ri_idx in  0..50 {
-                               history_ns[ri_idx] = self.mmap_array.index(cur_ind).runtimes_in_ns[(ri_idx+ring_idx) % 50];
+                            for ri_idx in 0..50 {
+                                history_ns[ri_idx] = self.mmap_array.index(cur_ind).runtimes_in_ns
+                                    [(ri_idx + ring_idx) % 50];
                             }
                             selected_slots.push(history_ns);
                             selected_slots_ind.push(cur_ind);
-                            
                         }
                         let result_model: Vec<u64> =
-                                model_runner::predict(selected_slots.clone()).unwrap();
-
+                            model_runner::predict(selected_slots.clone()).unwrap();
 
                         for cur_i in 0..16 {
-
-                            self.mmap_array.index_mut(selected_slots_ind[cur_i]).expected_slice = result_model[cur_i];
-
+                            self.mmap_array
+                                .index_mut(selected_slots_ind[cur_i])
+                                .expected_slice = result_model[cur_i];
                         }
-
-
-
-                        
                     }
                 }
             }
@@ -806,7 +800,15 @@ fn main() -> Result<()> {
         }
     }
 
-    let _ = model_runner::init();
+    match model_runner::init() {
+        Ok(_) => {
+            //println!("model başlatıldı!!");
+        }
+
+        Err(e) => {
+            panic!("ERROR : {:?}", e);
+        }
+    }
 
     let mut open_object = MaybeUninit::uninit();
     loop {

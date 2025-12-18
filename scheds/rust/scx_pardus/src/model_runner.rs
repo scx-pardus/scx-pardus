@@ -26,6 +26,8 @@ pub struct Models {
 
 static mut MODELS: Option<Models> = None;
 
+
+
 fn init_model(model_path: &str) -> Result<Session, AppError> {
     let model_data = std::fs::read(model_path)?;
     let session = Session::builder()?
@@ -122,6 +124,10 @@ fn run_model(
 
 
 pub fn predict(inputs: Vec<[u64; 50]>) -> Result<Vec<u64>, ort::Error> {
+   unsafe{ if MODELS.is_none() {
+        init();
+    }
+}
     let n = 16;
     let models: &mut Models = unsafe { MODELS.as_mut().unwrap() };
     let tcn: &mut Session = &mut models.tcn_model;
@@ -148,11 +154,13 @@ pub fn predict(inputs: Vec<[u64; 50]>) -> Result<Vec<u64>, ort::Error> {
 }
 
 pub fn init() -> Result<(), AppError> {
-    let tcn_path = "./scheds/rust/scx_pardus/src/res/model.onnx";
-    let xgboost_path = "./scheds/rust/scx_pardus/src/res/xgboost.onnx";
+    let tcn_path    = "./model.ort";
+    let xgboost_path = "./xgboost.ort";
 
     let tcn_model: Session = init_model(tcn_path)?;
     let xgb_model: Session = init_model(xgboost_path)?;
+
+    //println!("init model complete !!!");
 
     unsafe {
         MODELS = Some(Models {

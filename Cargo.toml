@@ -5,7 +5,7 @@ members = [
 resolver = "2"
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 debug  = false
 lto = true
 strip = "symbols"
