@@ -11,7 +11,7 @@ lto = true
 strip = "symbols"
 incremental = true
 codegen-units = 1
-
+panic = "abort"
 
 
 
