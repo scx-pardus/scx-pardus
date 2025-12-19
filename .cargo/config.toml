@@ -2,3 +2,7 @@
 build-std = ["std", "core", "alloc", "panic_abort"]
 build-std-features = ["std/optimize_for_size"]
 
+[build]
+rustflags = [
+  "-C", "target-cpu=native",
+]
