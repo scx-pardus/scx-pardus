@@ -5,7 +5,6 @@ pub mod bpf_intf;
 pub use bpf_intf::*;
 use libbpf_sys::{bpf_map, bpf_map__fd};
 
-mod stats;
 use std::ffi::{c_int, c_ulong};
 use std::fmt::Write;
 use std::mem::MaybeUninit;
@@ -23,7 +22,6 @@ use libbpf_rs::ProgramInput;
 use libbpf_rs::{AsRawLibbpf, MapCore, OpenObject};
 use log::warn;
 use log::{debug, info};
-use scx_stats::prelude::*;
 use scx_utils::autopower::{fetch_power_profile, PowerProfile};
 use scx_utils::build_id;
 use scx_utils::compat;
@@ -40,7 +38,6 @@ use scx_utils::Cpumask;
 use scx_utils::Topology;
 use scx_utils::UserExitInfo;
 use scx_utils::NR_CPU_IDS;
-use stats::Metrics;
 
 const SCHEDULER_NAME: &str = "scx_pardus";
 const RUNTIME_HISTORY_SIZE: usize = 50;
@@ -317,7 +314,6 @@ struct Scheduler<'a> {
     opts: &'a Opts,
     topo: Topology,
     power_profile: PowerProfile,
-    stats_server: StatsServer<(), Metrics>,
     mmap_array: MmapedBpfArray,
     user_restart: bool,
 }
@@ -331,20 +327,6 @@ impl<'a> Scheduler<'a> {
 
         // Check host topology to determine if we need to enable SMT capabilities.
         let smt_enabled = !opts.disable_smt && topo.smt_enabled;
-
-        // Determine the amount of non-empty NUMA nodes in the system.
-        let nr_nodes = topo
-            .nodes
-            .values()
-            .filter(|node| !node.all_cpus.is_empty())
-            .count();
-        info!("NUMA nodes: {}", nr_nodes);
-
-        // Automatically disable NUMA optimizations when running on non-NUMA systems.
-        let numa_enabled = !opts.disable_numa && nr_nodes > 1;
-        if !numa_enabled {
-            info!("Disabling NUMA optimizations");
-        }
 
         // Determine the primary scheduling domain.
         let power_profile = Self::power_profile();
@@ -396,7 +378,7 @@ impl<'a> Scheduler<'a> {
         let rodata = skel.maps.rodata_data.as_mut().unwrap();
         rodata.debug = opts.debug;
         rodata.smt_enabled = smt_enabled;
-        rodata.numa_enabled = numa_enabled;
+        rodata.numa_enabled = false;
         rodata.local_pcpu = opts.local_pcpu;
         rodata.no_wake_sync = opts.no_wake_sync;
         rodata.sticky_tasks = opts.sticky_tasks;
@@ -429,11 +411,7 @@ impl<'a> Scheduler<'a> {
             | *compat::SCX_OPS_ENQ_LAST
             | *compat::SCX_OPS_ENQ_MIGRATION_DISABLED
             | *compat::SCX_OPS_ALLOW_QUEUED_WAKEUP
-            | if numa_enabled {
-                *compat::SCX_OPS_BUILTIN_IDLE_PER_NODE
-            } else {
-                0
-            };
+            | 0;
         info!(
             "scheduler flags: {:#x}",
             skel.struct_ops.bpfland_ops_mut().flags
@@ -473,7 +451,6 @@ impl<'a> Scheduler<'a> {
 
         // Attach the scheduler.
         let struct_ops = Some(scx_ops_attach!(skel, bpfland_ops)?);
-        let stats_server = StatsServer::new(stats::server_data()).launch()?;
 
         let mmap_array: MmapedBpfArray = MmapedBpfArray::new(map_fd, map_max_entries).unwrap();
 
@@ -483,7 +460,6 @@ impl<'a> Scheduler<'a> {
             opts,
             topo,
             power_profile,
-            stats_server,
             mmap_array,
             user_restart: false,
         })
@@ -653,16 +629,7 @@ impl<'a> Scheduler<'a> {
         Ok(())
     }
 
-    fn get_metrics(&self) -> Metrics {
-        let bss_data = self.skel.maps.bss_data.as_ref().unwrap();
-        Metrics {
-            nr_running: bss_data.nr_running,
-            nr_cpus: bss_data.nr_online_cpus,
-            nr_kthread_dispatches: bss_data.nr_kthread_dispatches,
-            nr_direct_dispatches: bss_data.nr_direct_dispatches,
-            nr_shared_dispatches: bss_data.nr_shared_dispatches,
-        }
-    }
+ 
 
     pub fn exited(&mut self) -> bool {
         uei_exited!(&self.skel, uei)
@@ -672,19 +639,13 @@ impl<'a> Scheduler<'a> {
         let mut active_slots: Vec<usize> = Vec::new();
         let len_of_array = self.mmap_array.len;
 
-        //let (res_ch, req_ch) = self.stats_server.channels();
         while !shutdown.load(Ordering::Relaxed) && !self.exited() {
             if self.refresh_sched_domain() {
                 self.user_restart = true;
                 break;
             }
 
-            /*
-            match req_ch.recv_timeout(Duration::from_millis(1000)) {
-                Ok(()) => res_ch.send(self.get_metrics())?,
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(e) => Err(e)?,
-            }*/
+           
 
             std::thread::sleep(Duration::from_millis(100));
 
@@ -751,11 +712,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if opts.help_stats {
-        stats::server_data().describe_meta(&mut std::io::stdout(), None)?;
-        return Ok(());
-    }
-
+   
     let loglevel = simplelog::LevelFilter::Info;
 
     let mut lcfg = simplelog::ConfigBuilder::new();
@@ -779,26 +736,6 @@ fn main() -> Result<()> {
     })
     .context("Error setting Ctrl-C handler")?;
 
-    if let Some(intv) = opts.monitor.or(opts.stats) {
-        let shutdown_copy = shutdown.clone();
-        let jh = std::thread::spawn(move || {
-            match stats::monitor(Duration::from_secs_f64(intv), shutdown_copy) {
-                Ok(_) => {
-                    debug!("stats monitor thread finished successfully")
-                }
-                Err(error_object) => {
-                    warn!(
-                        "stats monitor thread finished because of an error {}",
-                        error_object
-                    )
-                }
-            }
-        });
-        if opts.monitor.is_some() {
-            let _ = jh.join();
-            return Ok(());
-        }
-    }
 
     match model_runner::init() {
         Ok(_) => {

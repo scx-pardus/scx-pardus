@@ -1441,7 +1441,6 @@ version = "1.0.20"
 dependencies = [
  "anyhow",
  "clap",
- "crossbeam",
  "ctrlc",
  "libbpf-rs",
  "libbpf-sys",
