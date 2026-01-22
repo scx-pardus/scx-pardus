@@ -21,7 +21,7 @@ use clap::Parser;
 use libbpf_rs::ProgramInput;
 use libbpf_rs::{AsRawLibbpf, MapCore, OpenObject};
 use log::warn;
-use log::{debug, info};
+use log::info;
 use scx_utils::autopower::{fetch_power_profile, PowerProfile};
 use scx_utils::build_id;
 use scx_utils::compat;

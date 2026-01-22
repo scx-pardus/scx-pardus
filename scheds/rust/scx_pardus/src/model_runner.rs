@@ -125,7 +125,7 @@ fn run_model(
 
 pub fn predict(inputs: Vec<[u64; 50]>) -> Result<Vec<u64>, ort::Error> {
    unsafe{ if MODELS.is_none() {
-        init();
+        let _ = init();
     }
 }
     let n = 16;

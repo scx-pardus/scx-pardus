@@ -1,66 +1,9 @@
 use anyhow::Result;
 use anyhow::{anyhow, Context};
-use log::{info, warn};
+use log::warn;
 use nix::sys::resource::{getrlimit, setrlimit, Resource, RLIM_INFINITY};
-use scx_stats::prelude::*;
-use serde::Deserialize;
 use std::path::Path;
-use std::thread::sleep;
-use std::time::Duration;
 
-pub fn monitor_stats<T>(
-    stats_args: &[(String, String)],
-    intv: Duration,
-    mut should_exit: impl FnMut() -> bool,
-    mut output: impl FnMut(T) -> Result<()>,
-) -> Result<()>
-where
-    T: for<'a> Deserialize<'a>,
-{
-    let mut retry_cnt: u32 = 0;
-
-    const RETRYABLE_ERRORS: [std::io::ErrorKind; 2] = [
-        std::io::ErrorKind::NotFound,
-        std::io::ErrorKind::ConnectionRefused,
-    ];
-
-    while !should_exit() {
-        let mut client = match StatsClient::new().connect() {
-            Ok(v) => v,
-            Err(e) => match e.downcast_ref::<std::io::Error>() {
-                Some(ioe) if RETRYABLE_ERRORS.contains(&ioe.kind()) => {
-                    if retry_cnt == 1 {
-                        info!("Stats server not available, retrying...");
-                    }
-                    retry_cnt += 1;
-                    sleep(Duration::from_secs(1));
-                    continue;
-                }
-                _ => Err(e)?,
-            },
-        };
-        retry_cnt = 0;
-
-        while !should_exit() {
-            let stats = match client.request::<T>("stats", stats_args.to_owned()) {
-                Ok(v) => v,
-                Err(e) => {
-                    if let Some(ioe) = e.downcast_ref::<std::io::Error>() {
-                        info!("Connection to stats_server failed ({ioe})");
-                    } else {
-                        warn!("Error handling stats_server result: {e}");
-                    }
-                    sleep(Duration::from_secs(1));
-                    break;
-                }
-            };
-            output(stats)?;
-            sleep(intv);
-        }
-    }
-
-    Ok(())
-}
 
 pub fn try_set_rlimit_infinity() {
     // Increase MEMLOCK size since the BPF scheduler might use
